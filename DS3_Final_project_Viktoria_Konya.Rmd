@@ -1,0 +1,835 @@
+---
+title: "Analysis of speeches of NATO officials"
+subtitle: "Comparison of the contents of NATO's official communication about  Russia's attacks on Ukraine in 2014 and 2022"
+author: "Viktória Kónya"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+geometry: margin=1.8cm
+fontsize: 10pt
+output:
+
+  prettydoc::html_pretty:
+    highlight: github
+    toc: true
+    theme: cayman
+---
+
+```{r setup, include = F}
+
+# Chunk setup
+knitr::opts_chunk$set(warning = F, message = F, cache = TRUE)
+
+```
+
+```{r folder-library-setup}
+
+# Clear environment
+rm(list=ls())
+
+# Folder locations
+main <- getwd()
+data <- paste0(main, '/data')
+output <- paste0(main, '/output')
+
+# Import libraries
+library(tidyverse)
+library(tidytext)
+library(scales)
+library(stringr)
+library(tidyr)
+library(kableExtra)
+library(lubridate)
+library(textstem)
+
+```
+
+### 1. Introduction
+
+In this article I am going to analyze speeches and transcripts from NATO officials that I scraped from NATO's official website. My goal is to compare the contents of the speeches from the time when Russia annexed Crimea in 2014 and most recent speeches when Russia started a war against Ukraine. My hypothesis is that we can find substantial differences in the communication and NATO's reaction was more assertive from the beginning of the current conflict.
+In order to compare the two situations, I will focus on the textual contents of NATO speeches in the first two months after the outbreak of each attack against Ukraine. I will use 2014.02.20 as the beginning date of the annexation of Crimea and will compare the speeches from the 2014.02.20–2014.04.30 interval to the most recent speeches. Regarding the Russian-Ukrainian war, I will use the speeches from 2022.02.24–2022.05.05 interval for comparison.
+The full R markdown file that I used for this analysis can be found under my GitHub repo.
+
+### 2. Data collection
+
+Speeches and transcripts of NATO officials can be found on [NATO's official website](https://www.nato.int/cps/en/natohq/opinions.htm). The speeches are tagged with the date when the speech was held which enables us to make comparisons of the content across time. The title of the speeches are mostly in a standard format including the name of the speaker, its rank and the type of the speech. The speeches cover a great deal of different types from remarks to lectures which information can also be extracted from the title. I used this information later to restrict my sample only to the relevant type of speeches.
+
+For my base dataset the following information was scraped from the website:
+
+-   Date of the speech
+
+-   Title
+
+-   URL
+
+-   Text of the speech
+
+Let's import the dataset!
+
+```{r data-import}
+
+# Import data
+df <- read_csv(paste0(data,'/nato_speeches.csv'), show_col_types = FALSE)
+
+```
+
+### 3. Data wrangling
+
+The scraped dataset contains speeches from 2008.01.01 to 2022.05.07. and altogether has 2307 records. In order to restrict my sample, I had to extract information on the type of the speech and the speaker who is associated with the speech.
+
+```{r data-wrangling}
+
+# Change the format of the dates
+df$speech_date <- as.Date(paste0(substr(df$speech_date, 9,12), "-", substr(df$speech_date, 4,6), "-", substr(df$speech_date, 1,2)), format =  "%Y-%b-%d")
+df$speech_date_m <- ym(format(as.Date(df$speech_date, "%Y-%m-%d"), "%Y-%m"))
+
+df <- df %>% 
+  
+  # Add additional date formats and unique ID 
+  mutate(speech_date_yr = year(speech_date),
+         speech_date_q = quarter(speech_date),
+         speech_length = (nchar(speech)),
+         ID = row_number()
+  ) %>% 
+  
+  # Categorization of speeches based on the title
+  mutate(category = case_when(
+    str_detect(tolower(title), "remark|remarks") ~ "remark",
+    str_detect(tolower(title), "interview") ~ "interview",  
+    str_detect(tolower(title), "press conference|press briefing|press point|presse|media huddle|press|media briefing") ~ "press conference",  
+    str_detect(tolower(title), "video message|message") ~ "message",  
+    str_detect(tolower(title), "statement") ~ "statement",  
+    str_detect(tolower(title), "speech") ~ "speech",
+    str_detect(tolower(title), "conversation|roundtable") ~ "conversation",  
+    str_detect(tolower(title), "address|adress") ~ "address",  
+    str_detect(tolower(title), "lecture|session|corner") ~ "lecture",  
+    str_detect(tolower(title), "discussion") ~ "discussion", 
+    str_detect(tolower(title), "op-ed") ~ "op-ed",
+    str_detect(tolower(title), "report") ~ "report",
+    TRUE ~ 'other'
+  )) %>% 
+  
+  # Speaker categorization by title
+  mutate(speech_by = case_when(
+    str_detect(tolower(title), "assistant secretary general") ~ "assistant secretary general", 
+    str_detect(tolower(title), "deputy secretary general") ~ "deputy secretary general", 
+    str_detect(tolower(title), "deputy assistant secretary general") ~ "deputy assistant secretary general", 
+    str_detect(tolower(title), "secretary general") ~ "secretary general", 
+    str_detect(tolower(title), "general") ~ "general", 
+    str_detect(tolower(title), "admiral") ~ "admiral", 
+    str_detect(tolower(title), "ambassador") ~ "ambassador", 
+    str_detect(tolower(title), "military committee") ~ "military committee", 
+    str_detect(tolower(title), "nato spokesman") ~ "nato spokesman",                                
+    TRUE ~ 'other'  
+  )) %>% 
+  
+  # Speaker categorization by name
+  mutate(speech_by_name = case_when(
+    str_detect(tolower(title), "stoltenberg") ~ "Jens Stoltenberg", 
+    str_detect(tolower(title), "rasmussen|fogh") ~ "Anders Fogh Rasmussen", 
+    str_detect(tolower(title), "geoană|mircea") ~ "Mircea Geoană", 
+    str_detect(tolower(title), "vershbow") ~ "Alexander Vershbow", 
+    str_detect(tolower(title), "bisogniero") ~ "Claudio Bisogniero", 
+    str_detect(tolower(title), "camille grand") ~ "Camille Grand", 
+    str_detect(tolower(title), "gottemoeller") ~ "Rose Gottemoeller", 
+    str_detect(tolower(title), "bauer") ~ "Rob Bauer", 
+    str_detect(tolower(title), "pavel") ~ "Petr Pavel",  
+    str_detect(tolower(title), "paola") ~ "Giampaolo di Paola", 
+    str_detect(tolower(title), "sedwill") ~ "Mark Sedwill", 
+    str_detect(tolower(title), "scheffer|hoop") ~ "Jaap de Hoop Scheffer", 
+    TRUE ~ 'other'  
+  ))
+
+```
+
+There were some speeches in other languages than English (mostly in French) that I flagged with the corresponding language using the `textcat`package of R and later removed.
+
+```{r language-detect}
+
+library("textcat")
+df$language <- textcat(df$speech)
+# saveRDS(df, file = paste0(data, "/df_language.rds"))
+
+```
+
+### 4. Explonatory data analysis
+
+Before we move on, let's take a look at the distribution of the speeches by the prevoiusly created categories.
+
+#### 4.1. Speeches by type
+
+The vast majority of the content is from press conferences.
+
+```{r eda-1, warnings = F}
+
+# Speeches by year and speech type
+ggplot(df) +
+  aes(x = speech_date_yr, fill = category) +
+  geom_bar() +
+  theme_bw() +
+  scale_fill_viridis_d() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(
+    title = 'Number of speeches by year and category',
+    x = 'Speech year',
+    y = 'Number of speeches') 
+
+
+```
+
+#### 4.2. Speeches by rank and type
+
+Mostly the secretary general of NATO holds the speeches.
+
+```{r eda-2}
+
+# Speeches by year and title of the speaker
+ggplot(df) +
+  aes(x = speech_by, fill = category) +
+  geom_bar() +
+  theme_bw() +
+  scale_fill_viridis_d() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(
+    title = 'Number of speeches by year and the title of the speaker',
+    y = 'Number of speeches',
+    x = '') 
+
+
+```
+
+#### 4.3. Speeches by speaker and type
+
+We can see that the vast majority of the speeches were held by the two secretary generals of NATO, Anders Fogh Rasmussen (2009--2014) and Jens Stoltenberg (2014-). 
+
+```{r eda-3}
+
+ggplot(df) +
+  aes(x = speech_by_name, fill = category) +
+  geom_bar() +
+  theme_bw() +
+  scale_fill_viridis_d() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(
+    title = 'Number of speeches by speaker and speech type',
+    x = '',
+    y = 'Number of speeches') 
+
+```
+
+### 5. Sample selection
+
+Not all of the speeches and transcripts are relevant for this analysis. For example, lectures and reports do not contain information about the attitude of the origination. I selected six types of speeches for my analysis that most probably reflect opinions of the NATO officials: speech, message, press conference, statement, discussion and interview. I also restricted the sample to speeches that were made between 2013 and 2022 and excluded non-English speeches. Moreover, speeches where the speaker was not identified were removed.
+
+```{r sample-selection}
+
+df_speech <- df %>% 
+  
+  # Keep only English speeches
+  filter(language == 'english') %>% 
+  
+  # Keep only speeches
+  filter(category %in% c('speech', 'message', 'press conference', 'statement', 'discussion', 'interview')) %>% 
+  
+  # Keep only speeches where the speaker was identified
+  filter(!is.na(speech_by)) %>% 
+    
+  # Keep only speeches from after 2013
+  filter(speech_date_yr >= 2013 ) 
+
+```
+
+The final sample consists of 903 speeches from the following categories:
+
+```{r sample-selection-chart}
+
+ggplot(df_speech) +
+  aes(x = as.factor(speech_date_yr), fill = category) +
+  geom_bar(bins = 30L) +
+  theme_bw() +
+  scale_fill_viridis_d() +
+  theme(axis.text.x = element_text( hjust = 1)) + 
+  labs(
+    title = 'Number of speeches by year and category',
+    x = 'Speech year',
+    y = 'Number of speeches') 
+
+```
+
+### 6. Text preprocessing
+
+The textual data first needs to be cleaned from redundant contents and prepared for the further analysis. In order to remove noise from the text I applied the following pre-processing steps using the `tidytext`, `textstem`and `stringr`packages:
+
+-   Removing the names of the NATO officials from the text as these terms are repeated in the texts
+
+-   Removing the rank of the speakers (eg. secretary general) as because of similar considerations
+
+-   Tokenization
+
+-   Removing stop words
+
+-   Removing words that contain numerical content
+
+-   Lemmatizing the words 
+
+-   Removing words that are less than three characters long
+
+```{r text-preprocessing}
+
+# Call stop words list
+data(stop_words)
+
+# Define remove list
+remove <- data_frame(word = c('nato', 'secretary', 'spokesperson', 'afternoon', 'moderator', 'ambassador', 'good', 'afternoon'))
+speaker_name_list <- append(unique(tolower(df_speech$speech_by_name)), c('fogh rasmussen', 'anders fogh', 'tom stepherson', 'knud bartels', 'melanne verveer', 'damon wilson', 'philip breedlove', 'hans lothar', 'lothar momröse', 'oana lungescu'))
+speaker_title_list <- unique(tolower(df_speech$speech_by))
+
+# Create clean text
+df_tokenized <- df_speech %>%
+  
+  # Remove 's
+  mutate(speech = gsub("['’]s", "", speech)) %>% 
+  
+  # Remove NATO officials' names
+  mutate( speech = gsub(paste0("\\b(", paste0(speaker_name_list, collapse="|"), ")[s]?\\b"), '', speech, ignore.case = TRUE) ) %>% 
+  
+  # Remove NATO officials' titles
+  mutate( speech = gsub(paste0("\\b(", paste0(speaker_title_list, collapse="|"), ")[s]?\\b"), '', speech, ignore.case = TRUE) ) %>% 
+  
+  # Replace ’ with '
+  mutate(speech = str_replace_all(speech, "’", "'")) %>% 
+
+  # Tokenize
+  unnest_tokens(word, speech) %>% 
+  
+  # Remove stopwords
+  anti_join(stop_words, by= "word") %>% 
+
+  # Remove list
+  anti_join(remove, by= "word") %>% 
+
+  # Remove words that contain numbers
+  filter( !grepl("[0-9]", word) ) %>% 
+
+  #Lemmatize 
+  mutate(word = lemmatize_words(word)) %>% 
+
+  # Remove if less than 3 words
+  filter(nchar(word) >= 3) 
+
+
+saveRDS(df_tokenized, file = paste0(data, "/df_tokenized.rds"))
+
+```
+
+Now our data is ready for the analysis, so let's check what can we infer from the speeches!
+
+### 7. Identifying word clusters with topic modeling
+
+Before we jump in and narrow down our analysis only on the relevant time intervals, let's first take a look at the full sample. The question is that what are the main topics that we can identify from the speeches? In order to group the content of the speeches I will use the LDA (Latent Dirichlet allocation) method to fit a topic modeling on the data. This will allow us to discover clusters of terms that forms different topics.
+
+The `topicmodels` package is a handy tool if we want to work with topic models. First, we have to create a document term matrix from the tokenized dataset. Then we have to determine the number of topics that we would like to extract and then fit the model. Lastly, we can discover the topics by visualizing the most common terms within each topic.
+
+My final topic model was fitted with 8 topics. Let's check what terms are clustered in each topic:
+
+-   Topic 7 is definitely about the Ukrainian-Russian military conflicts (2014–2015 and 2022 -) covering the security policy aspects of it. It also points back to the Russian-Georgian war (2008) 
+-   Topic 2 again seems to be about the Ukrainian-Russian military conflicts but it has terms related to the military aspects of it such as weapon, arm, nuclear and missile
+-   Topic 3 is about the Afghan war (2001–2014)
+-   Topic 1 covers terms related to the European unity
+-   Topic 4 summarizes military terms such as nuclear, missile, arm and weapon
+-   Topic 5 is about the aspects of the global alliance such as defense, spend, strong and share
+
+```{r topic-modelling, fig.align='center', fig.height=10, fig.width=9}
+
+library(topicmodels)
+
+# Create document term matrix
+df_speech_dtm <- df_tokenized %>%
+  #filter("2022-02-24" < speech_date) %>% 
+  count(ID, word) %>%
+  cast_dtm(ID, word, n)
+
+# Create LDA model
+lda <- LDA(df_speech_dtm, k = 8, control = list(seed = 1234))
+
+# Top terms in each topic
+tidy(lda, matrix = "beta") %>%
+  group_by(topic) %>%
+  top_n(15, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta) %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip()
+
+```
+In the subsequent analysis I am going to focus on the parts related to the Russian-Ukrainian military conflicts.
+
+### 8. Changes in the most frequent terms
+
+First let's do a chronological examination of the dataset by comparing the most frequent terms in the speeches by the year of the speech. For this I used the `ggwordcloud`package and included the 40 most frequently used terms in the wordcloud.
+
+```{r wc-by-year, fig.align='center', fig.height=10, fig.width=9}
+
+library(ggwordcloud)
+
+df_wc <- df_tokenized %>%
+  group_by(word, speech_date_yr) %>% 
+  summarize(count = n()) %>% 
+  group_by(speech_date_yr) %>% 
+  mutate(sum_count = sum(count), prop = count / sum(count)) %>%
+  arrange(speech_date_yr, desc(prop)) %>% 
+  group_by(speech_date_yr) %>% 
+  top_n(40, prop) %>% 
+  mutate(angle = 45 * sample(-2:2, n(), replace = TRUE, prob = c(1, 1, 4, 1, 1)))
+
+set.seed(123456)
+ggplot(df_wc, aes(label = word, size = prop,color = prop)) +
+  geom_text_wordcloud_area(shape = "circle") +
+  scale_size_area(max_size = 12) +
+  theme_minimal() +
+  scale_colour_distiller(palette = "Dark2",type = "seq",direction = 1,aesthetics = "colour") +
+  facet_wrap(~speech_date_yr, ncol = 2) +
+  theme_bw()
+
+```
+
+Speeches from 2014 and 2022 both share 'ukraine' and 'russia' as the top most frequently mentioned terms. While in 2014 'defense' and 'security' were among the most commonly used terms in the speeches in the first five months of 2022 the occurrence of 'ally' dominated the speeches. Also terms such as 'support' also appeared among the most repeated terms. It indicates that in case of the current Russian-Ukrainian war the importance of joint actions and cooperation receives more emphasis in the communication. Moreover the term 'war' also appeared among the top 15 most frequent terms in 2022 for the first time. Explicitly declaring the current Russian military attacks as war in the official communication is a fundamental difference between the 2014 and 2022 situations. If we look at the persistence of the 'ukraine' term we can see that after 2015 it lost space from NATO speeches up until 2022.
+
+In order to deeper investigate how fast did the attacks against Ukraine appear in the NATO communication and then disappear let's plot the the monthly number of occurrences of the 'russia' and 'russian', additionally of the 'ukraine' and 'ukrainian' terms over the examined period. The dashed lines show the time of the outbreak of the military attacks.
+
+Let's see for Russia:
+
+```{r russia-keyword}
+
+df_tokenized %>% 
+  filter(word %in% c("russia", "russian")) %>% 
+  group_by(speech_date_m, category) %>% 
+  dplyr::summarize(count = n()) %>% 
+  ggplot() +
+  geom_bar(aes(x=speech_date_m, weight=count, fill = category)) +
+  scale_x_date(date_breaks = "3 months" , date_labels = "%Y-%m") +
+  scale_fill_viridis_d() +
+  geom_vline(xintercept = as.numeric(as.Date("2014-02-20")), linetype = "dashed", size = 1) +
+  geom_vline(xintercept = as.numeric(as.Date("2022-02-24")), linetype = "dashed", size = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        panel.grid.major = element_blank()) +
+  labs(
+    title = "Occurances or 'russia' and 'russian' terms" ,
+    x = '',
+    y = 'Number of occurances')
+```
+
+And for Ukraine:
+
+```{r ukraine-keyword}
+
+df_tokenized %>% 
+  filter(word %in% c("ukraine", "ukrainian")) %>% 
+  filter(speech_date_yr >=2013) %>% 
+  group_by(speech_date_m, category) %>% 
+  summarize(count = n()) %>% 
+  ggplot() +
+  geom_bar(aes(x=speech_date_m, weight=count, fill = category)) +
+  scale_x_date(date_breaks = "3 months" , date_labels = "%Y-%m") +
+  scale_fill_viridis_d() +
+  geom_vline(xintercept = as.numeric(as.Date("2014-02-20")), linetype = "dashed", size = 1) +
+  geom_vline(xintercept = as.numeric(as.Date("2022-02-24")), linetype = "dashed", size = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        panel.grid.major = element_blank()) +
+  labs(
+    title = "Occurances or 'ukraine' and 'ukrainian' terms" ,
+    x = '',
+    y = 'Number of occurances') 
+
+```
+
+As we have seen before, Russia had high number of mentions over the whole examined period. Whet we can see from the timelines is that in absolute terms the mentions of both nations skyrocketed in third quarter of 2021. Also note that most of the mentions are from speeches at press conferences. This indicates that much more emphasis is placed on the current Russian attacks than back in the time of the Crimean crisis.
+
+### 9. Comparison of the content of speeches in the first two months of the Russian attacks
+
+As the next step, we can analyze the contents of the speeches from the next two months after the outbreak of the attacks. In order to do that I created two subsamples of the speeches covering the 2014.02.20 -2014.04.30 period and the 2022.02.24 -2022.05.07 period. The next chart compares the most frequent terms in the NATO speeches from the approximately two months after the start of the Russian attacks.
+
+```{r comparison}
+
+# 2014 subsample
+df_2014 <- df_tokenized %>%
+  filter(speech_date >= "2014-02-20" & speech_date <= "2014-04-30")
+
+# 2022 subsample
+df_2022 <- df_tokenized %>%
+   filter(speech_date >= "2022-02-24") 
+
+frequency <- bind_rows(
+    mutate(df_2014, year = "Speeches: 2014-02-20 to 2014-04-30"),
+    mutate(df_2022, year = "Speeches: 2022-02-24 to 2022-05-07")) %>%
+  count(year, word) %>%
+  group_by(year) %>%
+  mutate(proportion = n / sum(n)) %>%
+  select(-n) %>%
+  spread(year, proportion) %>%
+  gather(year, proportion, `Speeches: 2022-02-24 to 2022-05-07`)
+
+ggplot(frequency, aes(x = proportion, y = `Speeches: 2014-02-20 to 2014-04-30`,
+  color = abs(`Speeches: 2014-02-20 to 2014-04-30` - proportion))) +
+  geom_abline(color = "gray40", lty = 2, intercept = 0) +
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.3, height = 0.3, show.legend = FALSE) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5, show.legend = FALSE) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_color_gradient(limits = c(0, 0.001),
+  low = "darkslategray4", high = "gray75") +
+  theme(legend.position="none") +
+  labs(y = "Speeches: 2014-02-20 to 2014-04-30", 
+       x = "Speeches: 2022-02-24 to 2022-05-07",
+       title = "Comparison of the content of speeches in the first two months of the attacks") +
+  theme_bw()
+
+
+```
+
+'Ukraine', 'security', 'defence' and 'military' are among the most frequent terms in both scenarios. 'Ally' is somewhat more frequent term in speeches after the start of the Ukrainian-Russian attacks. As we saw earlier the term 'war' only has relatively high representation in the 2022 subsample. Moreover, there are some other threat factors that seem to be associated only with the current war: nuclear and chemical.
+
+### 10. Analysis of the co-occurring terms with bigrams
+
+Let's investigate further that which are the terms that are connected to Russia and to Ukraine in the first two months of the attacks. For this I created bi-grams with the 'russia', 'russian' and additionally with the 'ukraine', 'ukrainian' terms and filtered for the first two months of the attacks in 2014 and 2022.
+
+Let's compare first the terms related to Russia:
+
+```{r preprocess-bigram}
+
+# Preprocess
+
+df_bigrams <- df_speech %>%  
+  
+  # Replace ’ with '
+  mutate(speech = str_replace_all(speech, "’", "'")) %>% 
+  
+  # Remove NATO officials' names
+  mutate( speech = gsub(paste0("\\b(", paste0(speaker_name_list, collapse="|"), ")[s]?\\b"), '', speech, ignore.case = TRUE) ) %>% 
+  
+  # Remove NATO officials' titles
+  mutate( speech = gsub(paste0("\\b(", paste0(speaker_title_list, collapse="|"), ")[s]?\\b"), '', speech, ignore.case = TRUE) ) %>% 
+  
+  # Bigrams
+  unnest_tokens(bigram, speech, token = "ngrams", n = 2) %>%
+  
+  # Split bigram
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  mutate(bigram = paste(word1, word2)) %>%
+  
+  # Filter out bigrams with stopwords
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+
+  # Filter out if any word is shorter than 3 characters
+  filter(nchar(word1) >= 3) %>%
+  filter(nchar(word2) >= 3) %>%
+
+  # Filter out if any word not alphabetical
+  filter( !grepl("[0-9]", word1) ) %>%
+  filter( !grepl("[0-9]", word2) ) %>%
+
+   # Filter out if any word is on the remove list
+  filter(!word1 %in% remove$word) %>%
+  filter(!word2 %in% remove$word) 
+  
+# saveRDS(df_bigrams, file = paste0(data, "/df_bigrams"))
+
+```
+
+We can create nice visualizations of the bigrams using the igraphand ggraphpackages. See an example below for the bigrams with Russia.
+
+#### 10.1. Bigram with Russia, 2014-02-20 to 2014-04-30
+
+```{r bigram-russia-2014}
+
+library(igraph)
+library(ggraph)
+
+# Russia 2014-02-20 - 2014-04-30
+bigram_russia_count <- df_bigrams %>%
+   filter(word2 %in% c("russia", "russian") | word1 %in% c("russia", "russian")) %>%
+   filter(speech_date > "2014-02-20" & speech_date <= "2014-04-30") %>% 
+   count(word1,word2, bigram)
+
+set.seed(123456)
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+bigram_graph <- bigram_russia_count %>%
+  filter(n > 1) %>%
+  graph_from_data_frame()
+
+grid::arrow(type = "closed", length = unit(.15, "inches"))
+ggraph(bigram_graph, layout = "fr") +
+geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+arrow = a, end_cap = circle(.07, 'inches')) +
+geom_node_point(color = "lightblue", size = 5) +
+geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+theme_void()
+
+
+```
+
+#### 10.2.Bigram with Russia, 2022-02-24 to 2022-05-05
+
+```{r bigram-russia-2022}
+
+# Russia 2022-02-24 -
+bigram_russia_count <- df_bigrams %>%
+   filter(word2 %in% c("russia", "russian") | word1 %in% c("russia", "russian")) %>%
+   filter(speech_date > "2022-02-24") %>% 
+   count(word1,word2, bigram)
+
+set.seed(123456)
+bigram_graph <- bigram_russia_count %>%
+  filter(n > 2) %>%
+  graph_from_data_frame()
+
+grid::arrow(type = "closed", length = unit(.15, "inches"))
+ggraph(bigram_graph, layout = "fr") +
+geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+arrow = a, end_cap = circle(.07, 'inches')) +
+geom_node_point(color = "lightblue", size = 5) +
+geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+theme_void()
+
+```
+
+It is clearly visible that in 2022 following the start of the attacks in Ukraine strong words are used together with the 'russia' term such as 'aggression', 'offensive', 'threat', 'invasion', 'pressure' and 'control' while in 2014 these words are not mentioned with Russia.
+
+#### 10.3. Bigram with Ukraine, 2014-02-20 to 2014-04-30
+
+Moving to Ukraine the differences in the related terms are again visible. Compared to 2014 in 2022 NATO's communication is much more supportive of Ukraine with terms like 'support', 'helping' and 'protect' appearing in the bigram. In addition, military terminology such as 'airspace', 'army', 'forces', 'troops' are more concentrated with the 'ukrainian' term.
+
+```{r bigram-ukraine-2014}
+
+# Ukraine 2014-02-20 - 2014-04-30
+bigram_ukraine_count <- df_bigrams %>%
+   filter(word2 %in% c("ukraine", "ukrainian") | word1 %in% c("ukraine", "ukrainian")) %>%
+   filter(speech_date > "2014-02-20" & speech_date <= "2014-04-30") %>% 
+   count(word1,word2, bigram)
+
+set.seed(123456)
+bigram_graph <- bigram_ukraine_count %>%
+  filter(n > 1) %>%
+  graph_from_data_frame()
+
+grid::arrow(type = "closed", length = unit(.15, "inches"))
+ggraph(bigram_graph, layout = "fr") +
+geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+arrow = a, end_cap = circle(.07, 'inches')) +
+geom_node_point(color = "lightblue", size = 5) +
+geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+theme_void()
+
+
+```
+
+#### 10.4. Bigram with Ukraine, 2022-04-24 to 2022-05-05
+
+```{r bigram-ukraine-2022}
+
+# Ukraine 2022-02-24 -
+bigram_ukraine_count <- df_bigrams %>%
+   filter(word2 %in% c("ukraine", "ukrainian") | word1 %in% c("ukraine", "ukrainian")) %>%
+   filter(speech_date > "2022-02-24" ) %>% 
+   count(word1,word2, bigram)
+
+set.seed(123456)
+bigram_graph <- bigram_ukraine_count %>%
+  filter(n > 3) %>%
+  graph_from_data_frame()
+
+grid::arrow(type = "closed", length = unit(.15, "inches"))
+ggraph(bigram_graph, layout = "fr") +
+geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+arrow = a, end_cap = circle(.07, 'inches')) +
+geom_node_point(color = "lightblue", size = 5) +
+geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+theme_void()
+
+```
+
+### 11. Analysis of the correlated terms
+
+The drawback of bigrams is that it only allows for the analysis of consecutive terms. Instead of doing that we can analyze that which are the terms that tends to occur together within the same speech. For this, we can use the `widyr` package which will return with a measure that shows that how often the words appear in the same section.
+
+In this analysis I examined the top 10 most correlated terms with the 'russia' word excluding the 'russian', 'ukraine' and 'ukrainian' words and compared the 2-month period after the attacks.
+
+```{r correlation1}
+
+library(widyr)
+
+word_cors <- df_tokenized %>%
+  filter(speech_date > "2014-02-20" & speech_date <= "2014-04-30") %>% 
+  filter(!(word %in% c("meet", "time", "call", "day", "base", "message", "send", "eastern"))) %>% 
+  select(title, ID, word) %>% 
+  group_by(word) %>%
+  filter(n() >= 4) %>%
+  pairwise_cor(word, ID, sort = TRUE)
+
+# Russia
+word_cors %>%
+  filter(item1 %in% c("russia")) %>%
+  filter(!(item2 %in% c("russian", "ukraine", "ukrainian"))) %>%
+  group_by(item1) %>%
+  filter(correlation > .3) %>% 
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(item2 = reorder(item2, correlation)) %>%
+  ggplot(aes(item2, correlation, fill = item2)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_viridis_d() +
+  coord_flip() +
+  theme_bw() +
+  labs(
+    title = "Correlated words with keyword 'russia', 2014" ,
+    x = '',
+    y = 'Correlation') +
+  scale_fill_viridis_d() +
+  theme_bw()
+
+
+```
+
+```{r correlation2}
+
+word_cors <- df_tokenized %>%
+  filter(speech_date > "2022-02-24") %>% 
+  filter(!(word %in% c("meet", "time", "call", "day", "base", "message", "send", "eastern"))) %>% 
+  select(title, ID, word) %>% 
+  group_by(word) %>%
+  filter(n() >= 2) %>%
+  pairwise_cor(word, ID, sort = TRUE)
+
+# Russia
+word_cors %>%
+  filter(item1 %in% c("russia")) %>%
+  filter(!(item2 %in% c("russian", "ukraine"))) %>%
+  group_by(item1) %>%
+  filter(correlation > .2) %>%  
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(item2 = reorder(item2, correlation)) %>%
+  ggplot(aes(item2, correlation, fill = item2)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_viridis_d() +
+  coord_flip() +
+  theme_bw() +
+  labs(
+    title = "Correlated words with keyword 'russia', 2022" ,
+    x = '',
+    y = 'Correlation') +
+  scale_fill_viridis_d() +
+  theme_bw()
+
+
+```
+
+The most correlated terms have some overlap with the related terms suggested by the bigrams for example 'invasion'. However, we can see that some terms related to warfare are also highly correlated with Russia in the speeches such as 'brutal' or 'equipment'. We can also see that the term 'humanitarian' has about 0.5 correlation coefficient which indicates that in the current war atrocities against civilians are also frequently appearing concern about Russia.
+
+
+### 12. Sentiment analysis
+
+The next step in the text mining is that we can analyze the sentiments of the speeches with simple dictionary based text analytics. We can do this by joining a sentiment dictionary to the tokenized dataset and then aggregating the number of occurrences of words associated with positive and negative sentiments.
+First, I am going to investigate if we can see any breaks in the sentiments of the speeches at the time of the outburst of the Russian military attacks. For this I will use the 'bing' sentiment dictionary of the tidytextpackage which includes sentiment words identified on online forums. In order to identify changes in the pattern, I calculated the net sentiment score (number of positive words minus number of negative words).
+
+Let's look at the sentiment points around the time of the attacks. The dashed line shows the official date of the start of the military attacks.
+
+```{r sentiment-bing}
+
+# 2022
+df_tokenized %>% 
+  filter(speech_date > "2022-01-01" ) %>%
+  inner_join(get_sentiments("bing")) %>% 
+  count(speech_date, sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative) %>% 
+  mutate(sentiment_direction = ifelse(sentiment>=0, 1, 0)) %>% 
+  ggplot( aes(speech_date, sentiment,fill = factor(sentiment_direction))) +
+  geom_col(show.legend = FALSE,  size = 5) +
+  geom_vline(xintercept = as.numeric(as.Date("2022-02-24")), linetype = "dashed", size = 1) +
+  scale_x_date(date_breaks = "1 month" , date_labels = "%Y-%m") +
+  scale_fill_manual(values = c("blue", "red")) %>% 
+  labs(
+    title = "Daily sentiment points from speeches, 2022" ,
+    x = '',
+    y = 'Sentiment') +
+  theme_bw()
+
+# 2014
+df_tokenized %>% 
+  filter(speech_date > "2014-01-01" & speech_date <= "2014-05-01") %>%
+  inner_join(get_sentiments("bing")) %>% 
+  count(speech_date, sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative) %>% 
+  mutate(sentiment_direction = ifelse(sentiment>=0, 1, 0)) %>% 
+  ggplot( aes(speech_date, sentiment, fill = factor(sentiment_direction))) +
+  geom_col(show.legend = FALSE,  size = 5) +
+  geom_vline(xintercept = as.numeric(as.Date("2014-02-20")), linetype = "dashed", size = 1) +
+  scale_x_date(date_breaks = "1 month" , date_labels = "%Y-%m") +
+  scale_fill_manual(values = c("blue", "red")) %>% 
+  labs(
+    title = "Daily sentiment points from speeches, 2014" ,
+    x = '',
+    y = 'Sentiment') +
+  theme_bw()
+
+
+```
+
+If we compare the 2014 and 2022 years we can see that in 2022 there was a huge spike in the number of negative words in the speeches immediately after the start of the military actions. In contrast in 2014 we cannot see such pattern.
+
+We can also analyze that which type of emotions are the most common in the speeches. For this, I will use the 'nrc' dictionary of tidytextwhich contains words and their associations with eight basic emotions.
+Let's again focus on the two months just after the start of the military actions and join the emotion association lexicon to the tokenized dataset.
+
+Let's again compare the distribution of the words associated with different emotions in the speeches after the outbreak of the attacks.
+
+```{r sentiment-nrc}
+
+# 2022
+df_tokenized %>% 
+  filter(speech_date > "2022-02-24" ) %>%
+  inner_join(get_sentiments("nrc")) %>% 
+  count(sentiment) %>% 
+  mutate(sentiment = reorder(sentiment, n)) %>% 
+  filter(!(sentiment %in% c('positive', 'negative'))) %>% 
+  ggplot( aes(x= sentiment, y= n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(
+    title = "Distribution of sentiment categories after the outbreak, 2022" ,
+    x = '',
+    y = 'Number of words') +
+  scale_fill_viridis_d() +
+  theme_bw()
+
+# 2014
+df_tokenized %>% 
+  filter(speech_date > "2014-02-20" & speech_date <= "2014-05-01") %>%
+  inner_join(get_sentiments("nrc")) %>% 
+  count(sentiment) %>% 
+  mutate(sentiment = reorder(sentiment, n)) %>% 
+  filter(!(sentiment %in% c('positive', 'negative'))) %>% 
+  ggplot( aes(x= sentiment, y= n, fill = sentiment)) +
+  geom_col(show.legend = FALSE)+
+  coord_flip() +
+  labs(
+    title = "Distribution of sentiment categories after the outbreak, 2014" ,
+    x = '',
+    y = 'Number of words') +
+  scale_fill_viridis_d() +
+  theme_bw()
+
+```
+
+Trust is the leading in both periods which is mainly due to the commonly used terms such as cooperation, ally and partners. If we look at the chart from 2022 we can see that, besides trust, most of the words are associated with fear and anger. In contrast, following the annexation of Crimea the speeches mostly contained words related to anticipation.
+
+## 13. Summary
+
+In this article I analyzed the textual contents of the official communication of NATO leaders. First, I discovered the main topics from the speeches of the past one decade. Both the military and security policy aspects of the Russian-Ukrainian conflicts seemed to be commonly discussed topics in the speeches. Then I analyzed the changes in the most frequently used terms. Compared to 2014 the relative importance of alliance and support terms increased. When I looked at the persistence of the mentions of the opposing parties in the speeches I found that occurrences of the 'ukraine' and 'ukrainian' terms gradually declined in the next two years following the 2014 attacks and skyrocketed again a few months before the outbreak of the current war. When I compared the contents of the speeches from 2014 and 2022 we could see that the expression 'war' was only frequently mentioned after 2022. By comparing the terms related to Russia from the speeches from 2014 and 2022 I have found that in the 2022 speeches Russia is associated with stronger expressions in the speeches  such as 'aggression', 'offensive', 'invasion' and 'brutal'. Finally, I also analyzed the sentiments from the speeches. When I examined occurrences of positive versus negative words I found that in case of the 2022 conflict there was an immediate jump in the number of negative words in the speeches just after the outbreak of the war. Such pattern did not present in the speeches from 2014. By looking at the associated emotions, words related to 'fear' and 'anger' are the most frequent categories in the current NATO speeches (after words related to 'trust' which due to the NATO terminology about alliance).
+
+
+
+
